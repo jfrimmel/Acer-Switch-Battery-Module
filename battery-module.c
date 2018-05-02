@@ -9,12 +9,15 @@ MODULE_AUTHOR("Julian Frimmel <julian.frimmel@gmail.com>");
 MODULE_DESCRIPTION("Module for fixing the battery on an Acer Switch 11 Laptop");
 MODULE_VERSION("0.1");
 
-/** Bus number of the battery */
+/** The name that the battery should get in the sysfs */
+#define BATTERY_NAME "BAT0"
+
+
+/** Bus number of the battery (depends on used hardware) */
 #define BATTERY_I2C_BUS 1
 
-/** Bus address of the battery */
+/** Bus address of the battery (depends on used hardware) */
 #define BATTERY_I2C_ADDRESS 0x70
-
 
 #define BATTERY_REGISTER_STATUS 0xC1
 #define BATTERY_REGISTER_RATE 0xD0
@@ -78,7 +81,7 @@ static int battery_get_property(
 
 /** The descriptor of the battery device */
 static const struct power_supply_desc battery_description = {
-        .name = "BAT0",
+        .name = BATTERY_NAME,
         .type = POWER_SUPPLY_TYPE_BATTERY,
         .properties = battery_properties,
         .num_properties = ARRAY_SIZE(battery_properties),
@@ -173,7 +176,7 @@ static unsigned int battery_rate(void) {
     return rate * battery_voltage();
 }
 
-/** Read the current battery status (chargin, discharging, full or unknown) */
+/** Read the current battery status (charging, discharging, full or unknown) */
 static unsigned int battery_status(void) {
     const u8 status = read_byte_register(BATTERY_REGISTER_STATUS);
 
@@ -196,7 +199,7 @@ static unsigned int battery_capacity(void) {
         return 100 * battery_energy() / battery_energy_full();
 }
 
-/** Read the level of capacity. Calulation based on fixed tresholds */
+/** Read the level of capacity. Calculation based on fixed thresholds */
 static unsigned int battery_capaity_level(void) {
     const unsigned int capacity = battery_capacity();
     if (capacity == 100)
@@ -303,7 +306,7 @@ static int battery_get_property(
         break;
 
     default:
-        printk(KERN_ERR "Battery module: unknwon report querried!\n");
+        printk(KERN_ERR "Battery module: unknown report requested!\n");
         return -EINVAL;
     }
     return 0;
