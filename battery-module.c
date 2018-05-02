@@ -190,7 +190,7 @@ static unsigned int battery_status(void) {
 /** Read the capacity in % (energy compared to energy if full) */
 static unsigned int battery_capacity(void) {
     unsigned int last_full = battery_energy_full();
-    if (!last_full)
+    if (unlikely(!last_full))
         return 0;
     else
         return 100 * battery_energy() / battery_energy_full();
@@ -212,7 +212,7 @@ static unsigned int battery_capaity_level(void) {
 /** Read the estimated time until the battery is empty */
 static unsigned int battery_time_to_empty(void) {
     unsigned int rate = battery_rate();
-    if (!rate)
+    if (unlikely(!rate))
         return 0;
     return battery_energy() * 60ULL * 60ULL * 1000ULL / rate;
 }
@@ -221,11 +221,11 @@ static unsigned int battery_time_to_empty(void) {
 static unsigned int battery_time_to_full(void) {
     int energy_missing;
     unsigned int rate = battery_rate();
-    if (!rate)
+    if (unlikely(!rate))
         return 0;
 
     energy_missing = battery_energy_full() - battery_energy();
-    if (energy_missing < 0)
+    if (unlikely(energy_missing) < 0)
         energy_missing = 0;
 
     return energy_missing * 60ULL * 60ULL * 1000ULL / rate;
@@ -234,7 +234,7 @@ static unsigned int battery_time_to_full(void) {
 /** Read the current in mA */
 static unsigned int battery_current(void) {
     unsigned int voltage = battery_voltage();
-    if (!voltage) return 0;
+    if (unlikely(!voltage)) return 0;
     return battery_rate() / voltage;
 }
 
