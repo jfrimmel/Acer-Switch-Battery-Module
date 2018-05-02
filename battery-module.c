@@ -51,6 +51,7 @@ static struct battery_values {
     unsigned int time_to_empty;
     unsigned int time_to_full;
     unsigned int voltage;
+    unsigned int current_now;
 } battery_values;
 
 static struct power_supply *supply;
@@ -60,6 +61,7 @@ static enum power_supply_property supply_properties[] = {
     POWER_SUPPLY_PROP_TIME_TO_EMPTY_NOW,
     POWER_SUPPLY_PROP_TIME_TO_FULL_NOW,
     POWER_SUPPLY_PROP_VOLTAGE_NOW,
+    POWER_SUPPLY_PROP_CURRENT_NOW,
 
     POWER_SUPPLY_PROP_MODEL_NAME,
     POWER_SUPPLY_PROP_MANUFACTURER
@@ -146,7 +148,7 @@ static unsigned int *battery_read_state(unsigned int *PBST) {
     return PBST;
 }
 
-static void handle_discharging_battery(const unsigned int *pbst) {
+static void calculate_discharging_battery_values(const unsigned int *pbst) {
 #ifdef DEBUG
     const unsigned int battery_state = pbst[0];
 #endif
@@ -172,9 +174,10 @@ static void handle_discharging_battery(const unsigned int *pbst) {
         battery_values.capacity = remaining_capacity * 100 / last_full_capacity;
     battery_values.time_to_empty = secs_to_empty;
     battery_values.voltage = voltage;
+    battery_values.current_now = discharging_rate / voltage;
 }
 
-static void handle_charging_battery(const unsigned int *pbst) {
+static void calculate_charging_battery_values(const unsigned int *pbst) {
     const unsigned int charging_rate = pbst[1];
     const unsigned int remaining_capacity = pbst[2];
     const unsigned int voltage = pbst[3];
@@ -201,9 +204,11 @@ static void handle_charging_battery(const unsigned int *pbst) {
         battery_values.capacity = remaining_capacity * 100 / last_full_capacity;
     battery_values.time_to_full = secs_to_full;
     battery_values.voltage = voltage;
+    battery_values.current_now = charging_rate / voltage;
 }
 
-static void handle_ac_online(const unsigned int *pbst) {
+static void calculate_battery_full_values(const unsigned int *pbst) {
+    const unsigned int rate = pbst[1];
     const unsigned int remaining_capacity = pbst[2];
     const unsigned int voltage = pbst[3];
 #ifdef DEBUG
@@ -213,19 +218,22 @@ static void handle_ac_online(const unsigned int *pbst) {
     if (remaining_capacity)
         last_full_capacity = remaining_capacity;
     battery_values.voltage = voltage;
+    battery_values.time_to_full = 0;
+    battery_values.capacity = 100;
+    battery_values.current_now = rate / voltage;
 }
 
-static void handle_battery_state(const unsigned int *pbst) {
+static void calculate_battery_values(const unsigned int *pbst) {
     const unsigned int battery_state = pbst[0];
 
     if (!pbst[0] && !pbst[1] && !pbst[2] && !pbst[3])
         printk(KERN_ERR "Battery module: error reading battery state\n");
     else if (battery_state & 0x01)
-        handle_discharging_battery(pbst);
+        calculate_discharging_battery_values(pbst);
     else if (battery_state & 0x02)
-        handle_charging_battery(pbst);
+        calculate_charging_battery_values(pbst);
     else
-        handle_ac_online(pbst);
+        calculate_battery_full_values(pbst);
 }
 
 
@@ -240,7 +248,7 @@ static void handle_battery_state(const unsigned int *pbst) {
  * data is the used inside the function.
  *
  * The function returns 0 (success) on every known property, otherwise the
- * negative value of the "invalid value" error is returnd (negative, since the
+ * negative value of the "invalid value" error is returned (negative, since the
  * function is a callback, that should return a negative number on failure).
  */
 static int battery_get_property(
@@ -248,8 +256,8 @@ static int battery_get_property(
     enum power_supply_property property,
     union power_supply_propval *val
 ) {
-    unsigned int PBST[4] = {0, ~0, ~0, ~0};
-    handle_battery_state(battery_read_state(PBST));
+    unsigned int pbst[4] = {0, ~0, ~0, ~0};
+    calculate_battery_values(battery_read_state(pbst));
 
     switch (property) {
     case POWER_SUPPLY_PROP_CAPACITY:
@@ -266,6 +274,9 @@ static int battery_get_property(
         break;
     case POWER_SUPPLY_PROP_VOLTAGE_NOW:
         val->intval = battery_values.voltage;
+        break;
+    case POWER_SUPPLY_PROP_CURRENT_NOW:
+        val->intval = battery_values.current_now;
         break;
 
     case POWER_SUPPLY_PROP_MANUFACTURER:
