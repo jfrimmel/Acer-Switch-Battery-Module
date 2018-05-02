@@ -1,27 +1,48 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/timer.h>
 #include <linux/power_supply.h>
 #include <linux/i2c.h>
-#include <linux/kthread.h>
-#include <linux/delay.h>
 
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Julian Frimmel <julian.frimmel@gmail.com>");
 MODULE_DESCRIPTION("Module for fixing the battery on an Acer Switch 11 Laptop");
 MODULE_VERSION("0.1");
 
+/**
+ * Enable debug messages.
+ *
+ * Uncomment this macro, if you want to enable KERN_DEBUG messages in the kernel
+ * log. Those include the battery state and time to full/empty.
+ */
 // #define DEBUG
 
+/** Bus number of the battery */
 #define BATTERY_I2C_BUS 1
+
+/** Bus address of the battery */
 #define BATTERY_I2C_ADDRESS 0x70
 
-static __init int battery_module_init(void);
-static __exit void battery_module_exit(void);
 
-static struct i2c_adapter *i2c_dev;
-static struct i2c_client *i2c_client;
+/**
+ * The I2C bus of the battery.
+ *
+ * This has to be global, since it is used inside the initialization and exit
+ * functions. Since they are callbacks, no parameter can be used. The only other
+ * way to share this information is this (module-global) variable.
+ */
+static struct i2c_adapter *battery_bus;
+
+/**
+ * The I2C device of the battery.
+ *
+ * This has to be global, since it is used inside the initialization and exit
+ * functions. Since they are callbacks, no parameter can be used. The only other
+ * way to share this information is this (module-global) variable.
+ */
+static struct i2c_client *battery_device;
+
+/** The capacity of the full battery */
 static unsigned int last_full_capacity;
 
 static struct battery_values {
@@ -45,7 +66,7 @@ static enum power_supply_property supply_properties[] = {
     POWER_SUPPLY_PROP_MODEL_NAME,
     POWER_SUPPLY_PROP_MANUFACTURER
 };
-static int supply_get_property(
+static int battery_get_property(
     struct power_supply *supply,
     enum power_supply_property property,
     union power_supply_propval *val
@@ -56,7 +77,7 @@ static const struct power_supply_desc supply_description[] = {
         .type = POWER_SUPPLY_TYPE_BATTERY,
         .properties = supply_properties,
         .num_properties = ARRAY_SIZE(supply_properties),
-        .get_property = supply_get_property
+        .get_property = battery_get_property
     }
 };
 static const struct power_supply_config supply_config[] = {
@@ -78,12 +99,12 @@ static unsigned char battery_read_register(const unsigned char reg) {
     bufo[0] = 0x02;
     bufo[1] = 0x80;
     bufo[2] = reg;
-    msg.addr = i2c_client->addr;
+    msg.addr = battery_device->addr;
     msg.len = 5;
     msg.flags = 0;
     msg.buf = bufo;
     for (tries = 0; tries < max_tries; tries++) {
-        ret = i2c_transfer(i2c_client->adapter, &msg, 1);
+        ret = i2c_transfer(battery_device->adapter, &msg, 1);
         if (ret == 1)
             break;
         printk(KERN_ERR "Battery module: Write to register 0x%02X failed "
@@ -93,12 +114,12 @@ static unsigned char battery_read_register(const unsigned char reg) {
     }
     if (ret != 1) return 0x00;
 
-    msg.addr = i2c_client->addr;
+    msg.addr = battery_device->addr;
     msg.len = 1;
     msg.flags = I2C_M_RD;
     msg.buf = &value;
     for (tries = 0; tries < max_tries; tries++) {
-        ret = i2c_transfer(i2c_client->adapter, &msg, 1);
+        ret = i2c_transfer(battery_device->adapter, &msg, 1);
         if (ret == 1)
             break;
         printk(KERN_ERR "Battery module: Read of register 0x%02X failed "
@@ -209,7 +230,24 @@ static void handle_battery_state(const unsigned int *pbst) {
         handle_ac_online(pbst);
 }
 
-static int supply_get_property(
+
+/**
+ * Query a property from the battery.
+ *
+ * The function is called by the kernel, if any information from the driver is
+ * required.
+ *
+ * The function is currently designed in a way, that the "battery information"
+ * (see ACPI documentation) is read at every call to this function. The relevant
+ * data is the used inside the function.
+ *
+ * TODO: currently there is no averaging of the time to full/empty done.
+ *
+ * The function returns 0 (success) on every known property, otherwise the
+ * negative value of the "invalid value" error is returnd (negative, since the
+ * function is a callback, that should return a negative number on failure).
+ */
+static int battery_get_property(
     struct power_supply *supply,
     enum power_supply_property property,
     union power_supply_propval *val
@@ -225,13 +263,13 @@ static int supply_get_property(
         val->intval = battery_values.status;
         break;
     case POWER_SUPPLY_PROP_TIME_TO_EMPTY_AVG:
-        val->intval = battery_values.time_to_empty; // TODO: average
+        val->intval = battery_values.time_to_empty;
         break;
     case POWER_SUPPLY_PROP_TIME_TO_EMPTY_NOW:
         val->intval = battery_values.time_to_empty;
         break;
     case POWER_SUPPLY_PROP_TIME_TO_FULL_AVG:
-        val->intval = battery_values.time_to_full; // TODO: average
+        val->intval = battery_values.time_to_full;
         break;
     case POWER_SUPPLY_PROP_TIME_TO_FULL_NOW:
         val->intval = battery_values.time_to_full;
@@ -254,29 +292,62 @@ static int supply_get_property(
     return 0;
 }
 
-int battery_module_init(void) {
-    printk(KERN_INFO "Battery module: loading...\n");
 
+/**
+ * Initialize the kernel module.
+ *
+ * This function is called, if the module is loaded/inserted into the kernel.
+ * It acquires or registers resources, such as an I2C slave (the battery) or the
+ * power supply.
+ *
+ * TODO: since the last full capacity is not read from the battery, a hard-coded
+ * value is used. This value is set also in that function.
+ *
+ * If there were no errors, the function writes a information message to the
+ * kernel log and returns 0 (success).
+ *
+ * If an error has occurred, the function releases all up to that point acquired
+ * resources and returns -1 (error).
+ */
+static __init int battery_module_init(void) {
     last_full_capacity = 3750;
-    i2c_dev = i2c_get_adapter(BATTERY_I2C_BUS);
-    i2c_client = i2c_new_device(i2c_dev, board_info);
-    if (!i2c_client) goto error_i2c;
+
+    battery_bus = i2c_get_adapter(BATTERY_I2C_BUS);
+    battery_device = i2c_new_device(battery_bus, board_info);
+    if (!battery_device) goto error_i2c;
 
     supply = power_supply_register(NULL, &supply_description[0], &supply_config[0]);
     if (!supply) goto error_power_supply;
 
+    printk(KERN_INFO "Battery module: loaded\n");
     return 0;
 error_power_supply:
-    i2c_unregister_device(i2c_client);
+    i2c_unregister_device(battery_device);
+    i2c_put_adapter(battery_bus);
 error_i2c:
     return -1;
 }
 
-void battery_module_exit(void) {
+/**
+ * Exit the kernel module.
+ *
+ * This function is called, if the module is unloaded. It releases all acquired
+ * resources and writes an information message to the kernel log.
+ */
+static __exit void battery_module_exit(void) {
     power_supply_unregister(supply);
-    i2c_unregister_device(i2c_client);
+    i2c_unregister_device(battery_device);
+    i2c_put_adapter(battery_bus);
     printk(KERN_INFO "Battery module: unloaded\n");
 }
 
+
+/**
+ * Register initialization function.
+ */
 module_init(battery_module_init);
+
+/**
+ * Register exit function.
+ */
 module_exit(battery_module_exit);
