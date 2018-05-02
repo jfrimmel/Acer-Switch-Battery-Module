@@ -9,14 +9,6 @@ MODULE_AUTHOR("Julian Frimmel <julian.frimmel@gmail.com>");
 MODULE_DESCRIPTION("Module for fixing the battery on an Acer Switch 11 Laptop");
 MODULE_VERSION("0.1");
 
-/**
- * Enable debug messages.
- *
- * Uncomment this macro, if you want to enable KERN_DEBUG messages in the kernel
- * log. Those include the battery state and time to full/empty.
- */
-// #define DEBUG
-
 /** Bus number of the battery */
 #define BATTERY_I2C_BUS 1
 
@@ -48,11 +40,21 @@ static struct i2c_adapter *battery_bus;
  */
 static struct i2c_client *battery_device;
 
-/** The capacity of the full battery */
-static unsigned int last_full_capacity;
+/** The I2C slave information for the device tree */
+static struct i2c_board_info __initdata board_info[] = {
+    {I2C_BOARD_INFO("acer-switch-battery", BATTERY_I2C_ADDRESS)}
+};
 
-static struct power_supply *supply;
-static enum power_supply_property supply_properties[] = {
+
+/**
+ * The power supply "battery".
+ *
+ * This variable holds resource information about the registered power supply.
+ */
+static struct power_supply *battery;
+
+/** Available properties of the battery */
+static enum power_supply_property battery_properties[] = {
     POWER_SUPPLY_PROP_STATUS,
     POWER_SUPPLY_PROP_CAPACITY,
     POWER_SUPPLY_PROP_TIME_TO_EMPTY_NOW,
@@ -74,30 +76,24 @@ static int battery_get_property(
     union power_supply_propval*
 );
 
-static const struct power_supply_desc supply_description[] = {
-    {
+/** The descriptor of the battery device */
+static const struct power_supply_desc battery_description = {
         .name = "BAT0",
         .type = POWER_SUPPLY_TYPE_BATTERY,
-        .properties = supply_properties,
-        .num_properties = ARRAY_SIZE(supply_properties),
+        .properties = battery_properties,
+        .num_properties = ARRAY_SIZE(battery_properties),
         .get_property = battery_get_property
-    }
 };
 
-static const struct power_supply_config supply_config[] = {
-    {}
-};
-
-static struct i2c_board_info __initdata board_info[] = {
-    {I2C_BOARD_INFO("acer-switch-battery", BATTERY_I2C_ADDRESS)}
-};
+/** The configuration of the battery device */
+static const struct power_supply_config battery_config = {};
 
 
 /**
  * Read a single byte from a battery register.
  *
  * The "special" register access operation is used, i.e. 0x80 is written to the
- * slave frist, then the required sub-register and the the read of the byte.
+ * slave first, then the required sub-register and the the read of the byte.
  */
 static u8 read_byte_register(const u8 reg) {
     struct i2c_msg msg;
@@ -321,24 +317,21 @@ static int battery_get_property(
  * It acquires or registers resources, such as an I2C slave (the battery) or the
  * power supply.
  *
- * TODO: since the last full capacity is not read from the battery, a hard-coded
- * value is used. This value is set also in that function.
- *
- * If there were no errors, the function writes a information message to the
- * kernel log and returns 0 (success).
- *
- * If an error has occurred, the function releases all up to that point acquired
- * resources and returns -1 (error).
+ * The function returns 0 on success, -ENODEV (no such device error), if the
+ * I2C slave could not be created or -EINVAL (invalid argument), if the battery
+ * could not be registered.
  */
 static __init int battery_module_init(void) {
-    last_full_capacity = 3750;
-
     battery_bus = i2c_get_adapter(BATTERY_I2C_BUS);
     battery_device = i2c_new_device(battery_bus, board_info);
     if (!battery_device) return -ENODEV;
 
-    supply = power_supply_register(NULL, &supply_description[0], &supply_config[0]);
-    if (!supply) {
+    battery = power_supply_register(
+        NULL,
+        &battery_description,
+        &battery_config
+    );
+    if (!battery) {
         i2c_unregister_device(battery_device);
         i2c_put_adapter(battery_bus);
         return -EINVAL;
@@ -351,10 +344,10 @@ static __init int battery_module_init(void) {
  * Exit the kernel module.
  *
  * This function is called, if the module is unloaded. It releases all acquired
- * resources and writes an information message to the kernel log.
+ * resources.
  */
 static __exit void battery_module_exit(void) {
-    power_supply_unregister(supply);
+    power_supply_unregister(battery);
     i2c_unregister_device(battery_device);
     i2c_put_adapter(battery_bus);
 }
