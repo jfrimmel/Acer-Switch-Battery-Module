@@ -58,9 +58,7 @@ static enum power_supply_property supply_properties[] = {
     POWER_SUPPLY_PROP_STATUS,
     POWER_SUPPLY_PROP_CAPACITY,
     POWER_SUPPLY_PROP_TIME_TO_EMPTY_NOW,
-    POWER_SUPPLY_PROP_TIME_TO_EMPTY_AVG,
     POWER_SUPPLY_PROP_TIME_TO_FULL_NOW,
-    POWER_SUPPLY_PROP_TIME_TO_FULL_AVG,
     POWER_SUPPLY_PROP_VOLTAGE_NOW,
 
     POWER_SUPPLY_PROP_MODEL_NAME,
@@ -241,8 +239,6 @@ static void handle_battery_state(const unsigned int *pbst) {
  * (see ACPI documentation) is read at every call to this function. The relevant
  * data is the used inside the function.
  *
- * TODO: currently there is no averaging of the time to full/empty done.
- *
  * The function returns 0 (success) on every known property, otherwise the
  * negative value of the "invalid value" error is returnd (negative, since the
  * function is a callback, that should return a negative number on failure).
@@ -262,14 +258,8 @@ static int battery_get_property(
     case POWER_SUPPLY_PROP_STATUS:
         val->intval = battery_values.status;
         break;
-    case POWER_SUPPLY_PROP_TIME_TO_EMPTY_AVG:
-        val->intval = battery_values.time_to_empty;
-        break;
     case POWER_SUPPLY_PROP_TIME_TO_EMPTY_NOW:
         val->intval = battery_values.time_to_empty;
-        break;
-    case POWER_SUPPLY_PROP_TIME_TO_FULL_AVG:
-        val->intval = battery_values.time_to_full;
         break;
     case POWER_SUPPLY_PROP_TIME_TO_FULL_NOW:
         val->intval = battery_values.time_to_full;
