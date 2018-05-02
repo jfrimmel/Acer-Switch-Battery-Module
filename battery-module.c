@@ -52,6 +52,7 @@ static struct battery_values {
     unsigned int time_to_full;
     unsigned int voltage;
     unsigned int current_now;
+    unsigned int energy_wh;
 } battery_values;
 
 static struct power_supply *supply;
@@ -62,7 +63,12 @@ static enum power_supply_property supply_properties[] = {
     POWER_SUPPLY_PROP_TIME_TO_FULL_NOW,
     POWER_SUPPLY_PROP_VOLTAGE_NOW,
     POWER_SUPPLY_PROP_CURRENT_NOW,
+    POWER_SUPPLY_PROP_PRESENT,
+    POWER_SUPPLY_PROP_ONLINE,
+    POWER_SUPPLY_PROP_ENERGY_FULL,
+    POWER_SUPPLY_PROP_ENERGY_NOW,
 
+    POWER_SUPPLY_PROP_TECHNOLOGY,
     POWER_SUPPLY_PROP_MODEL_NAME,
     POWER_SUPPLY_PROP_MANUFACTURER
 };
@@ -132,20 +138,20 @@ static unsigned char battery_read_register(const unsigned char reg) {
     return value;
 }
 
-static unsigned int *battery_read_state(unsigned int *PBST) {
+static unsigned int *battery_read_state(unsigned int *pbst) {
     unsigned int tmp;
 
-    PBST[0] = battery_read_register(0xC1);
+    pbst[0] = battery_read_register(0xC1);
 
-    PBST[2] = (battery_read_register(0xC3) << 8) | battery_read_register(0xC2);
+    pbst[2] = (battery_read_register(0xC3) << 8) | battery_read_register(0xC2);
 
-    PBST[3] = (battery_read_register(0xC7) << 8) | battery_read_register(0xC6);
+    pbst[3] = (battery_read_register(0xC7) << 8) | battery_read_register(0xC6);
 
     tmp = (battery_read_register(0xD1) << 8) | battery_read_register(0xD0);
     if (tmp > 0x7FFF) tmp = 0x10000 - tmp;
-    PBST[1] = tmp * PBST[3];
+    pbst[1] = tmp * pbst[3];
 
-    return PBST;
+    return pbst;
 }
 
 static void calculate_discharging_battery_values(const unsigned int *pbst) {
@@ -163,7 +169,8 @@ static void calculate_discharging_battery_values(const unsigned int *pbst) {
         secs_to_empty = remaining_capacity * 36000 / (discharging_rate / 1000);
 
 #ifdef DEBUG
-    printk(KERN_DEBUG "Battery module: discharging%s. Time to empty: %uh %umin\n",
+    printk(KERN_DEBUG "Battery module: discharging%s. "
+            "Time to empty: %uh %umin\n",
             battery_state & 0x04 ? " (critical!)" : "",
             secs_to_empty / 60 / 60,
             secs_to_empty / 60 % 60
@@ -175,6 +182,7 @@ static void calculate_discharging_battery_values(const unsigned int *pbst) {
     battery_values.time_to_empty = secs_to_empty;
     battery_values.voltage = voltage;
     battery_values.current_now = discharging_rate / voltage;
+    battery_values.energy_wh = remaining_capacity * 10000;
 }
 
 static void calculate_charging_battery_values(const unsigned int *pbst) {
@@ -194,7 +202,8 @@ static void calculate_charging_battery_values(const unsigned int *pbst) {
         secs_to_full = missing_capacity * 3600 / (charging_rate / 1000);
 
 #ifdef DEBUG
-    printk(KERN_DEBUG "Battery module: charging. Time to full: %uh %umin\n",
+    printk(KERN_DEBUG "Battery module: charging. "
+            "Time to full: %uh %umin\n",
             secs_to_full / 60 / 60,
             secs_to_full / 60 % 60
     );
@@ -205,6 +214,7 @@ static void calculate_charging_battery_values(const unsigned int *pbst) {
     battery_values.time_to_full = secs_to_full;
     battery_values.voltage = voltage;
     battery_values.current_now = charging_rate / voltage;
+    battery_values.energy_wh = remaining_capacity * 10000;
 }
 
 static void calculate_battery_full_values(const unsigned int *pbst) {
@@ -221,6 +231,7 @@ static void calculate_battery_full_values(const unsigned int *pbst) {
     battery_values.time_to_full = 0;
     battery_values.capacity = 100;
     battery_values.current_now = rate / voltage;
+    battery_values.energy_wh = remaining_capacity * 10000;
 }
 
 static void calculate_battery_values(const unsigned int *pbst) {
@@ -278,16 +289,39 @@ static int battery_get_property(
     case POWER_SUPPLY_PROP_CURRENT_NOW:
         val->intval = battery_values.current_now;
         break;
+    case POWER_SUPPLY_PROP_TECHNOLOGY:
+        val->intval = POWER_SUPPLY_TECHNOLOGY_LION;
+        break;
+    case POWER_SUPPLY_PROP_PRESENT:
+    case POWER_SUPPLY_PROP_ONLINE:
+        val->intval = 1;
+        break;
+    case POWER_SUPPLY_PROP_ENERGY_FULL:
+        val->intval = last_full_capacity * 10000;
+        break;
+    case POWER_SUPPLY_PROP_ENERGY_NOW:
+        val->intval = battery_values.energy_wh;
+        break;
+    case POWER_SUPPLY_PROP_CAPACITY_LEVEL:
+        if (battery_values.capacity == 100)
+            val->intval = POWER_SUPPLY_CAPACITY_LEVEL_FULL;
+        else if (battery_values.capacity <= 5)
+            val->intval = POWER_SUPPLY_CAPACITY_LEVEL_CRITICAL;
+        else if (battery_values.capacity <= 15)
+            val->intval = POWER_SUPPLY_CAPACITY_LEVEL_LOW;
+        else
+            val->intval = POWER_SUPPLY_CAPACITY_LEVEL_NORMAL;
+        break;
 
     case POWER_SUPPLY_PROP_MANUFACTURER:
-        val->strval = "jfrimmel";
+        val->strval = "Acer";
         break;
     case POWER_SUPPLY_PROP_MODEL_NAME:
         val->strval = "Acer Switch 11 Battery by jfrimmel";
         break;
 
     default:
-        printk(KERN_ERR "Battery module: unknwon report querried!");
+        printk(KERN_ERR "Battery module: unknwon report querried!\n");
         return -EINVAL;
     }
     return 0;
@@ -321,6 +355,7 @@ static __init int battery_module_init(void) {
     if (!supply) goto error_power_supply;
 
     printk(KERN_INFO "Battery module: loaded\n");
+
     return 0;
 error_power_supply:
     i2c_unregister_device(battery_device);
