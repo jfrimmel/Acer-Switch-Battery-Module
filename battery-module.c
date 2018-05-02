@@ -51,16 +51,6 @@ static struct i2c_client *battery_device;
 /** The capacity of the full battery */
 static unsigned int last_full_capacity;
 
-static struct battery_values {
-    unsigned int capacity;
-    unsigned int status;
-    unsigned int time_to_empty;
-    unsigned int time_to_full;
-    unsigned int voltage;
-    unsigned int current_now;
-    unsigned int energy_wh;
-} battery_values;
-
 static struct power_supply *supply;
 static enum power_supply_property supply_properties[] = {
     POWER_SUPPLY_PROP_STATUS,
@@ -77,11 +67,13 @@ static enum power_supply_property supply_properties[] = {
     POWER_SUPPLY_PROP_MODEL_NAME,
     POWER_SUPPLY_PROP_MANUFACTURER
 };
+
 static int battery_get_property(
-    struct power_supply *supply,
-    enum power_supply_property property,
-    union power_supply_propval *val
+    struct power_supply*,
+    enum power_supply_property,
+    union power_supply_propval*
 );
+
 static const struct power_supply_desc supply_description[] = {
     {
         .name = "BAT0",
@@ -91,6 +83,7 @@ static const struct power_supply_desc supply_description[] = {
         .get_property = battery_get_property
     }
 };
+
 static const struct power_supply_config supply_config[] = {
     {}
 };
@@ -160,18 +153,22 @@ static u16 read_word_register(const u8 reg) {
 }
 
 
+/** Read the current energy in mWh */
 static unsigned int battery_energy(void) {
     return read_word_register(BATTERY_REGISTER_ENERGY) * 10;
 }
 
+/** Read the last full energy in mWh. TODO: read from battery */
 static unsigned int battery_energy_full(void) {
     return 37500;
 }
 
+/** Read the current voltage in mV */
 static unsigned int battery_voltage(void) {
     return read_word_register(BATTERY_REGISTER_VOLTAGE);
 }
 
+/** Read the current (dis-)charging rate in mW */
 static unsigned int battery_rate(void) {
     unsigned int rate;
     rate = read_word_register(BATTERY_REGISTER_RATE);
@@ -180,6 +177,7 @@ static unsigned int battery_rate(void) {
     return rate * battery_voltage();
 }
 
+/** Read the current battery status (chargin, discharging, full or unknown) */
 static unsigned int battery_status(void) {
     const u8 status = read_byte_register(BATTERY_REGISTER_STATUS);
 
@@ -193,6 +191,7 @@ static unsigned int battery_status(void) {
         return POWER_SUPPLY_STATUS_UNKNOWN;
 }
 
+/** Read the capacity in % (energy compared to energy if full) */
 static unsigned int battery_capacity(void) {
     unsigned int last_full = battery_energy_full();
     if (!last_full)
@@ -201,6 +200,20 @@ static unsigned int battery_capacity(void) {
         return 100 * battery_energy() / battery_energy_full();
 }
 
+/** Read the level of capacity. Calulation based on fixed tresholds */
+static unsigned int battery_capaity_level(void) {
+    const unsigned int capacity = battery_capacity();
+    if (capacity == 100)
+        return POWER_SUPPLY_CAPACITY_LEVEL_FULL;
+    else if (capacity <= 5)
+        return POWER_SUPPLY_CAPACITY_LEVEL_CRITICAL;
+    else if (capacity <= 15)
+        return POWER_SUPPLY_CAPACITY_LEVEL_LOW;
+    else
+        return POWER_SUPPLY_CAPACITY_LEVEL_NORMAL;
+}
+
+/** Read the estimated time until the battery is empty */
 static unsigned int battery_time_to_empty(void) {
     unsigned int rate = battery_rate();
     if (!rate)
@@ -208,6 +221,7 @@ static unsigned int battery_time_to_empty(void) {
     return battery_energy() * 60ULL * 60ULL * 1000ULL / rate;
 }
 
+/** Read the estimated time until the battery is fully charged */
 static unsigned int battery_time_to_full(void) {
     int energy_missing;
     unsigned int rate = battery_rate();
@@ -221,6 +235,7 @@ static unsigned int battery_time_to_full(void) {
     return energy_missing * 60ULL * 60ULL * 1000ULL / rate;
 }
 
+/** Read the current in mA */
 static unsigned int battery_current(void) {
     unsigned int voltage = battery_voltage();
     if (!voltage) return 0;
@@ -267,22 +282,17 @@ static int battery_get_property(
         val->intval = battery_current();
         break;
     case POWER_SUPPLY_PROP_ENERGY_FULL:
+        /* we calculate in mW, but the value is assumed to be in uW */
         val->intval = battery_energy_full() * 1000;
         break;
     case POWER_SUPPLY_PROP_ENERGY_NOW:
+        /* we calculate in mW, but the value is assumed to be in uW */
         val->intval = battery_energy() * 1000;
         break;
-
     case POWER_SUPPLY_PROP_CAPACITY_LEVEL:
-        if (battery_values.capacity == 100)
-            val->intval = POWER_SUPPLY_CAPACITY_LEVEL_FULL;
-        else if (battery_values.capacity <= 5)
-            val->intval = POWER_SUPPLY_CAPACITY_LEVEL_CRITICAL;
-        else if (battery_values.capacity <= 15)
-            val->intval = POWER_SUPPLY_CAPACITY_LEVEL_LOW;
-        else
-            val->intval = POWER_SUPPLY_CAPACITY_LEVEL_NORMAL;
+        val->intval = battery_capaity_level();
         break;
+
     case POWER_SUPPLY_PROP_PRESENT:
         val->intval = 1;
         break;
@@ -325,19 +335,16 @@ static __init int battery_module_init(void) {
 
     battery_bus = i2c_get_adapter(BATTERY_I2C_BUS);
     battery_device = i2c_new_device(battery_bus, board_info);
-    if (!battery_device) goto error_i2c;
+    if (!battery_device) return -ENODEV;
 
     supply = power_supply_register(NULL, &supply_description[0], &supply_config[0]);
-    if (!supply) goto error_power_supply;
-
-    printk(KERN_INFO "Battery module: loaded\n");
+    if (!supply) {
+        i2c_unregister_device(battery_device);
+        i2c_put_adapter(battery_bus);
+        return -EINVAL;
+    }
 
     return 0;
-error_power_supply:
-    i2c_unregister_device(battery_device);
-    i2c_put_adapter(battery_bus);
-error_i2c:
-    return -1;
 }
 
 /**
@@ -350,7 +357,6 @@ static __exit void battery_module_exit(void) {
     power_supply_unregister(supply);
     i2c_unregister_device(battery_device);
     i2c_put_adapter(battery_bus);
-    printk(KERN_INFO "Battery module: unloaded\n");
 }
 
 
