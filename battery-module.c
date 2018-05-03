@@ -401,10 +401,16 @@ static int ac_adapter_get_property(
     enum power_supply_property property,
     union power_supply_propval *val
 ) {
+    static unsigned int last_state = -1;
+    unsigned int current_state;
     switch (property) {
     case POWER_SUPPLY_PROP_ONLINE:
-        power_supply_changed(ac_adapter);
-        val->intval = ac_adapter_online();
+        current_state = ac_adapter_online();
+        if (current_state != last_state)
+            power_supply_changed(ac_adapter);
+        last_state = current_state;
+
+        val->intval = current_state;
         break;
 
     default:
