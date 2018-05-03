@@ -1,3 +1,23 @@
+/**
+ * Battery driver for the Acer Switch 11 laptop.
+ *
+ * Neither the battery nor the mains plug of that laptop were correctly detected
+ * by Linux, since the BIOS provides a (very) broken DSDT. Since I was not able
+ * to fix the table, I wrote this kernel module in order to provide the battery
+ * information.
+ *
+ * Author: Julian Frimmel <julian.frimmel@gmail.com>
+ *
+ * This software is licensed under the terms of the GNU General Public
+ * License version 2, as published by the Free Software Foundation, and
+ * may be copied, distributed, and modified under those terms.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ */
+
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -7,7 +27,7 @@
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Julian Frimmel <julian.frimmel@gmail.com>");
 MODULE_DESCRIPTION("Module for fixing the battery on an Acer Switch 11 Laptop");
-MODULE_VERSION("0.1");
+MODULE_VERSION("1.0.0");
 
 /** The name that the battery should get in the sysfs */
 #define BATTERY_NAME "BAT0"
