@@ -23,6 +23,8 @@
 #include <linux/kernel.h>
 #include <linux/power_supply.h>
 #include <linux/i2c.h>
+#include <linux/kthread.h>
+#include <linux/delay.h>
 
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Julian Frimmel <julian.frimmel@gmail.com>");
@@ -48,6 +50,11 @@ MODULE_VERSION("1.0.0");
 #define BATTERY_REGISTER_ENERGY 0xC2
 #define BATTERY_REGISTER_VOLTAGE 0xC6
 #define AC_ADAPTER_REGISTER 0x6F
+
+
+/** The time between two samples of the AC adapter state in milli seconds */
+#define AC_ADAPTER_CHECK_RATE_MS 500
+
 
 /**
  * The I2C bus of the battery.
@@ -163,6 +170,11 @@ static const struct power_supply_config ac_adapter_config = {
     .num_supplicants = ARRAY_SIZE(ac_adapter_to)
 };
 
+/** Holds the current state of the AD adapter. */
+static unsigned int ac_adapter_connected;
+
+/** The thread that periodically checks the AC adapter connection status */
+static struct task_struct *ac_adapter_thread;
 
 /**
  * Read a single byte from a battery register.
@@ -401,20 +413,26 @@ static int ac_adapter_get_property(
     enum power_supply_property property,
     union power_supply_propval *val
 ) {
-    static unsigned int last_state = -1;
-    unsigned int current_state;
     switch (property) {
     case POWER_SUPPLY_PROP_ONLINE:
-        current_state = ac_adapter_online();
-        if (current_state != last_state)
-            power_supply_changed(ac_adapter);
-        last_state = current_state;
-
-        val->intval = current_state;
+        val->intval = ac_adapter_connected;
         break;
 
     default:
         return -EINVAL;
+    }
+    return 0;
+}
+
+static int ac_adapter_updater(void *params) {
+    unsigned int last_state = -1;
+    while (!kthread_should_stop()) {
+        ac_adapter_connected = ac_adapter_online();
+        if (unlikely(ac_adapter_connected != last_state))
+            power_supply_changed(ac_adapter);
+        last_state = ac_adapter_connected;
+
+        msleep_interruptible(AC_ADAPTER_CHECK_RATE_MS);
     }
     return 0;
 }
@@ -454,8 +472,13 @@ static __init int battery_module_init(void) {
     );
     if (!ac_adapter) goto ac_adapter_registration_failure;
 
+    ac_adapter_thread = kthread_run(ac_adapter_updater, NULL, "AC update");
+    if (!ac_adapter_thread) goto thread_creation_failed;
+
     return 0;
 
+thread_creation_failed:
+    power_supply_unregister(ac_adapter);
 ac_adapter_registration_failure:
     power_supply_unregister(battery);
 battery_registration_failure:
@@ -475,6 +498,7 @@ i2c_bus_adapter_not_available:
  * resources.
  */
 static __exit void battery_module_exit(void) {
+    kthread_stop(ac_adapter_thread);
     power_supply_unregister(ac_adapter);
     power_supply_unregister(battery);
     i2c_unregister_device(ac_adapter_device);
