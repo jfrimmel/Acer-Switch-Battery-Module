@@ -31,27 +31,27 @@ Note that you need to compile the module on every kernel update!
 You need a compiler and the Linux headers for your Kernel version installed.
 
 For _pacman_ based systems:
-```bash
+```
 # pacman -S linux-headers
 ```
 For _APT_ based systems:
-```bash
+```
 # apt-get install linux-headers-$(uname -r)
 ```
 
 ### Compile
 It is as simple as cloning the repository and typing "make":
-```bash
-git clone https://github.com/jfrimmel/Acer-Switch-Battery-Module.git
-cd Acer-Switch-Battery-Module
-make
 ```
-There shouln't be any errors and a file "battery-module.ko" (along some others)
+$ git clone https://github.com/jfrimmel/Acer-Switch-Battery-Module.git
+$ cd Acer-Switch-Battery-Module
+$ make
+```
+There shouldn't be any errors and a file "battery-module.ko" (along some others)
 is created. This is your kernel module.
 
 ### Loading the module
 It can be loaded using the following command:
-```bash
+```
 # insmod battery-module.ko
 ```
 Note that _modprobe_ is generally a better choice than _insmod_ since _modprobe_
@@ -61,7 +61,7 @@ be used as well.
 ### Unloading the module
 If you wish to remove the module at some point you simple execute the following
 command:
-```bash
+```
 # rmmod battery-module.ko
 ```
 You don't need to do this under normal circumstances.
@@ -74,7 +74,7 @@ Such a driver is most likely the module _battery_ (for ACPI batteries) and _ac_
 (for ACPI AC adapters). They could either unloaded using _rmmod_ or blacklisted.
 
 To blacklist those modules execute the following command and reboot:
-```bash
+```
 # echo 'blacklist battery' >> /etc/modprobe.d/blacklist.conf
 # echo 'blacklist ac' >> /etc/modprobe.d/blacklist.conf
 ```
