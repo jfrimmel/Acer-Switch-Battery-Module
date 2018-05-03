@@ -12,18 +12,22 @@ MODULE_VERSION("0.1");
 /** The name that the battery should get in the sysfs */
 #define BATTERY_NAME "BAT0"
 
+/** The name that the AC adapter should get in the sysfs */
+#define AC_ADAPTER_NAME "ADP0"
+
 
 /** Bus number of the battery (depends on used hardware) */
 #define BATTERY_I2C_BUS 1
 
 /** Bus address of the battery (depends on used hardware) */
 #define BATTERY_I2C_ADDRESS 0x70
+#define AC_ADAPTER_I2C_ADDRESS 0x30
 
 #define BATTERY_REGISTER_STATUS 0xC1
 #define BATTERY_REGISTER_RATE 0xD0
 #define BATTERY_REGISTER_ENERGY 0xC2
 #define BATTERY_REGISTER_VOLTAGE 0xC6
-
+#define AC_ADAPTER_REGISTER 0x6F
 
 /**
  * The I2C bus of the battery.
@@ -44,7 +48,7 @@ static struct i2c_adapter *battery_bus;
 static struct i2c_client *battery_device;
 
 /** The I2C slave information for the device tree */
-static struct i2c_board_info __initdata board_info[] = {
+static struct i2c_board_info __initdata battery_info[] = {
     {I2C_BOARD_INFO("acer-switch-battery", BATTERY_I2C_ADDRESS)}
 };
 
@@ -90,6 +94,35 @@ static const struct power_supply_desc battery_description = {
 
 /** The configuration of the battery device */
 static const struct power_supply_config battery_config = {};
+
+
+static struct power_supply *ac_adapter;
+static struct i2c_client *ac_adapter_device;
+static struct i2c_board_info __initdata ac_adapter_info[] = {
+    {I2C_BOARD_INFO("acer-switch-AC", AC_ADAPTER_I2C_ADDRESS)}
+};
+static enum power_supply_property ac_adapter_properties[] = {
+    POWER_SUPPLY_PROP_ONLINE
+};
+static int ac_adapter_get_property(
+    struct power_supply*,
+    enum power_supply_property,
+    union power_supply_propval*
+);
+static const struct power_supply_desc ac_adapter_description = {
+        .name = AC_ADAPTER_NAME,
+        .type = POWER_SUPPLY_TYPE_MAINS,
+        .properties = ac_adapter_properties,
+        .num_properties = ARRAY_SIZE(ac_adapter_properties),
+        .get_property = ac_adapter_get_property
+};
+static char *ac_adapter_to[] = {
+    BATTERY_NAME
+};
+static const struct power_supply_config ac_adapter_config = {
+    .supplied_to = ac_adapter_to,
+    .num_supplicants = ARRAY_SIZE(ac_adapter_to)
+};
 
 
 /**
@@ -167,13 +200,18 @@ static unsigned int battery_voltage(void) {
     return read_word_register(BATTERY_REGISTER_VOLTAGE);
 }
 
-/** Read the current (dis-)charging rate in mW */
-static unsigned int battery_rate(void) {
+/** Read the current in mA */
+static unsigned int battery_current(void) {
     unsigned int rate;
     rate = read_word_register(BATTERY_REGISTER_RATE);
     if (rate > 0x7FFF) rate = 0x10000 - rate;
 
-    return rate * battery_voltage();
+    return rate;
+}
+
+/** Read the current (dis-)charging rate in mW */
+static unsigned int battery_rate(void) {
+    return battery_current() * battery_voltage();
 }
 
 /** Read the current battery status (charging, discharging, full or unknown) */
@@ -220,10 +258,23 @@ static unsigned int battery_time_to_empty(void) {
     return battery_energy() * 60ULL * 60ULL * 1000ULL / rate;
 }
 
+static unsigned int ac_adapter_online(void) {
+    u8 data = i2c_smbus_read_byte_data(ac_adapter_device, AC_ADAPTER_REGISTER);
+
+    if (data & 0x10)
+        return 1;
+    else
+        return 0;
+}
+
 /** Read the estimated time until the battery is fully charged */
 static unsigned int battery_time_to_full(void) {
     int energy_missing;
-    unsigned int rate = battery_rate();
+    unsigned int rate;
+    if (!ac_adapter_online())
+        return 0;
+
+    rate = battery_rate();
     if (unlikely(!rate))
         return 0;
 
@@ -232,13 +283,6 @@ static unsigned int battery_time_to_full(void) {
         energy_missing = 0;
 
     return energy_missing * 60ULL * 60ULL * 1000ULL / rate;
-}
-
-/** Read the current in mA */
-static unsigned int battery_current(void) {
-    unsigned int voltage = battery_voltage();
-    if (unlikely(!voltage)) return 0;
-    return battery_rate() / voltage;
 }
 
 
@@ -306,7 +350,23 @@ static int battery_get_property(
         break;
 
     default:
-        printk(KERN_ERR "Battery module: unknown report requested!\n");
+        return -EINVAL;
+    }
+    return 0;
+}
+
+/** Query a property of the AC adapter. TODO: read from device */
+static int ac_adapter_get_property(
+    struct power_supply *supply,
+    enum power_supply_property property,
+    union power_supply_propval *val
+) {
+    switch (property) {
+    case POWER_SUPPLY_PROP_ONLINE:
+        val->intval = ac_adapter_online();
+        break;
+
+    default:
         return -EINVAL;
     }
     return 0;
@@ -320,27 +380,45 @@ static int battery_get_property(
  * It acquires or registers resources, such as an I2C slave (the battery) or the
  * power supply.
  *
- * The function returns 0 on success, -ENODEV (no such device error), if the
- * I2C slave could not be created or -EINVAL (invalid argument), if the battery
- * could not be registered.
+ * The function returns 0 on success, -1 otherwise. Resources acquired during
+ * the initialization phase are released in the case of an error.
  */
 static __init int battery_module_init(void) {
     battery_bus = i2c_get_adapter(BATTERY_I2C_BUS);
-    battery_device = i2c_new_device(battery_bus, board_info);
-    if (!battery_device) return -ENODEV;
+    if (!battery_bus) goto i2c_bus_adapter_not_available;
+
+    battery_device = i2c_new_device(battery_bus, battery_info);
+    if (!battery_device) goto battery_device_creation_failed;
+
+    ac_adapter_device = i2c_new_device(battery_bus, ac_adapter_info);
+    if (!ac_adapter_device) goto ac_adapter_device_creation_failed;
 
     battery = power_supply_register(
         NULL,
         &battery_description,
         &battery_config
     );
-    if (!battery) {
-        i2c_unregister_device(battery_device);
-        i2c_put_adapter(battery_bus);
-        return -EINVAL;
-    }
+    if (!battery) goto battery_registration_failure;
+
+    ac_adapter = power_supply_register(
+        NULL,
+        &ac_adapter_description,
+        &ac_adapter_config
+    );
+    if (!ac_adapter) goto ac_adapter_registration_failure;
 
     return 0;
+
+ac_adapter_registration_failure:
+    power_supply_unregister(battery);
+battery_registration_failure:
+    i2c_unregister_device(ac_adapter_device);
+ac_adapter_device_creation_failed:
+    i2c_unregister_device(battery_device);
+battery_device_creation_failed:
+    i2c_put_adapter(battery_bus);
+i2c_bus_adapter_not_available:
+    return -1;
 }
 
 /**
@@ -350,7 +428,9 @@ static __init int battery_module_init(void) {
  * resources.
  */
 static __exit void battery_module_exit(void) {
+    power_supply_unregister(ac_adapter);
     power_supply_unregister(battery);
+    i2c_unregister_device(ac_adapter_device);
     i2c_unregister_device(battery_device);
     i2c_put_adapter(battery_bus);
 }
