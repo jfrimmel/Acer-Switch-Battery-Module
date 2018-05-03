@@ -363,6 +363,7 @@ static int ac_adapter_get_property(
 ) {
     switch (property) {
     case POWER_SUPPLY_PROP_ONLINE:
+        power_supply_changed(ac_adapter);
         val->intval = ac_adapter_online();
         break;
 
