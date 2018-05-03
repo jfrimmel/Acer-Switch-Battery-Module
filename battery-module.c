@@ -16,10 +16,10 @@ MODULE_VERSION("0.1");
 #define AC_ADAPTER_NAME "ADP0"
 
 
-/** Bus number of the battery (depends on used hardware) */
-#define BATTERY_I2C_BUS 1
+/** Bus number of the battery and the AC adapter (depends on used hardware) */
+#define I2C_BUS 1
 
-/** Bus address of the battery (depends on used hardware) */
+/** Bus address of the battery and the AC adapter (depends on used hardware) */
 #define BATTERY_I2C_ADDRESS 0x70
 #define AC_ADAPTER_I2C_ADDRESS 0x30
 
@@ -36,20 +36,24 @@ MODULE_VERSION("0.1");
  * functions. Since they are callbacks, no parameter can be used. The only other
  * way to share this information is this (module-global) variable.
  */
-static struct i2c_adapter *battery_bus;
+static struct i2c_adapter *i2c_bus;
 
 /**
- * The I2C device of the battery.
+ * The I2C device of the battery/AC adapter.
  *
  * This has to be global, since it is used inside the initialization and exit
  * functions. Since they are callbacks, no parameter can be used. The only other
  * way to share this information is this (module-global) variable.
  */
 static struct i2c_client *battery_device;
+static struct i2c_client *ac_adapter_device;
 
 /** The I2C slave information for the device tree */
 static struct i2c_board_info __initdata battery_info[] = {
     {I2C_BOARD_INFO("acer-switch-battery", BATTERY_I2C_ADDRESS)}
+};
+static struct i2c_board_info __initdata ac_adapter_info[] = {
+    {I2C_BOARD_INFO("acer-switch-AC", AC_ADAPTER_I2C_ADDRESS)}
 };
 
 
@@ -96,19 +100,25 @@ static const struct power_supply_desc battery_description = {
 static const struct power_supply_config battery_config = {};
 
 
+/**
+ * The power supply "AC adapter".
+ *
+ * This variable holds resource information about the registered power supply.
+ */
 static struct power_supply *ac_adapter;
-static struct i2c_client *ac_adapter_device;
-static struct i2c_board_info __initdata ac_adapter_info[] = {
-    {I2C_BOARD_INFO("acer-switch-AC", AC_ADAPTER_I2C_ADDRESS)}
-};
+
+/** Available properties of the mains plug */
 static enum power_supply_property ac_adapter_properties[] = {
     POWER_SUPPLY_PROP_ONLINE
 };
+
 static int ac_adapter_get_property(
     struct power_supply*,
     enum power_supply_property,
     union power_supply_propval*
 );
+
+/** The descriptor of the AC adapter device */
 static const struct power_supply_desc ac_adapter_description = {
         .name = AC_ADAPTER_NAME,
         .type = POWER_SUPPLY_TYPE_MAINS,
@@ -116,9 +126,18 @@ static const struct power_supply_desc ac_adapter_description = {
         .num_properties = ARRAY_SIZE(ac_adapter_properties),
         .get_property = ac_adapter_get_property
 };
+
+/** A list of all power supplies, that are supplied from the AC plug */
 static char *ac_adapter_to[] = {
     BATTERY_NAME
 };
+
+/**
+ * The configuration of the AC adapter device.
+ *
+ * It contains the battery as a "supplicant". If the AC adapter changes, all
+ * supplicants are also updated.
+ */
 static const struct power_supply_config ac_adapter_config = {
     .supplied_to = ac_adapter_to,
     .num_supplicants = ARRAY_SIZE(ac_adapter_to)
@@ -258,6 +277,7 @@ static unsigned int battery_time_to_empty(void) {
     return battery_energy() * 60ULL * 60ULL * 1000ULL / rate;
 }
 
+/** Read the state of the AC plug */
 static unsigned int ac_adapter_online(void) {
     u8 data = i2c_smbus_read_byte_data(ac_adapter_device, AC_ADAPTER_REGISTER);
 
@@ -355,7 +375,7 @@ static int battery_get_property(
     return 0;
 }
 
-/** Query a property of the AC adapter. TODO: read from device */
+/** Query a property of the AC adapter. */
 static int ac_adapter_get_property(
     struct power_supply *supply,
     enum power_supply_property property,
@@ -385,13 +405,13 @@ static int ac_adapter_get_property(
  * the initialization phase are released in the case of an error.
  */
 static __init int battery_module_init(void) {
-    battery_bus = i2c_get_adapter(BATTERY_I2C_BUS);
-    if (!battery_bus) goto i2c_bus_adapter_not_available;
+    i2c_bus = i2c_get_adapter(I2C_BUS);
+    if (!i2c_bus) goto i2c_bus_adapter_not_available;
 
-    battery_device = i2c_new_device(battery_bus, battery_info);
+    battery_device = i2c_new_device(i2c_bus, battery_info);
     if (!battery_device) goto battery_device_creation_failed;
 
-    ac_adapter_device = i2c_new_device(battery_bus, ac_adapter_info);
+    ac_adapter_device = i2c_new_device(i2c_bus, ac_adapter_info);
     if (!ac_adapter_device) goto ac_adapter_device_creation_failed;
 
     battery = power_supply_register(
@@ -417,7 +437,7 @@ battery_registration_failure:
 ac_adapter_device_creation_failed:
     i2c_unregister_device(battery_device);
 battery_device_creation_failed:
-    i2c_put_adapter(battery_bus);
+    i2c_put_adapter(i2c_bus);
 i2c_bus_adapter_not_available:
     return -1;
 }
@@ -433,7 +453,7 @@ static __exit void battery_module_exit(void) {
     power_supply_unregister(battery);
     i2c_unregister_device(ac_adapter_device);
     i2c_unregister_device(battery_device);
-    i2c_put_adapter(battery_bus);
+    i2c_put_adapter(i2c_bus);
 }
 
 
