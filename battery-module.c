@@ -404,11 +404,11 @@ static int battery_get_property(
         break;
     case POWER_SUPPLY_PROP_ENERGY_FULL_DESIGN:
         /* always report the last full capacity (we have no designed value) */
-        val->intval = battery_energy_full() * 1000;
+        val->intval = BATTERY_DEFAULT_FULL_ENERGY * 1000;
         break;
     case POWER_SUPPLY_PROP_ENERGY_EMPTY_DESIGN:
         /* always report 2.5% of the last full energy */
-        val->intval = battery_energy_full() * 25;
+        val->intval = BATTERY_DEFAULT_FULL_ENERGY * 25;
         break;
 
     case POWER_SUPPLY_PROP_PRESENT:
