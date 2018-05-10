@@ -104,6 +104,8 @@ static enum power_supply_property battery_properties[] = {
     POWER_SUPPLY_PROP_PRESENT,
     POWER_SUPPLY_PROP_ENERGY_FULL,
     POWER_SUPPLY_PROP_ENERGY_NOW,
+    POWER_SUPPLY_PROP_ENERGY_FULL_DESIGN,
+    POWER_SUPPLY_PROP_ENERGY_EMPTY_DESIGN,
 
     POWER_SUPPLY_PROP_TECHNOLOGY,
     POWER_SUPPLY_PROP_MODEL_NAME,
@@ -407,6 +409,14 @@ static int battery_get_property(
         break;
     case POWER_SUPPLY_PROP_CAPACITY_LEVEL:
         val->intval = battery_capaity_level();
+        break;
+    case POWER_SUPPLY_PROP_ENERGY_FULL_DESIGN:
+        /* always report the last full capacity (we have no designed value) */
+        val->intval = battery_energy_full() * 1000;
+        break;
+    case POWER_SUPPLY_PROP_ENERGY_EMPTY_DESIGN:
+        /* always report 2.5% of the last full energy */
+        val->intval = battery_energy_full() * 25;
         break;
 
     case POWER_SUPPLY_PROP_PRESENT:
