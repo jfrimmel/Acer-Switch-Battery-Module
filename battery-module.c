@@ -55,6 +55,8 @@ MODULE_VERSION("1.0.0");
 /** The time between two samples of the AC adapter state in milli seconds */
 #define AC_ADAPTER_CHECK_RATE_MS 500
 
+/** The maximum energy stored in the battery in mWh */
+#define BATTERY_DEFAULT_FULL_ENERGY 37500
 
 /**
  * The I2C bus of the battery.
@@ -125,6 +127,9 @@ static const struct power_supply_desc battery_description = {
 
 /** The configuration of the battery device */
 static const struct power_supply_config battery_config = {};
+
+/** Holds the energy stored in the battery the last time it was full */
+static unsigned int battery_last_full_energy = 37500;
 
 
 /**
@@ -241,9 +246,9 @@ static unsigned int battery_energy(void) {
     return read_word_register(BATTERY_REGISTER_ENERGY) * 10;
 }
 
-/** Read the last full energy in mWh. TODO: read from battery */
+/** Read the last full energy in mWh */
 static unsigned int battery_energy_full(void) {
-    return 37500;
+    return battery_last_full_energy;
 }
 
 /** Read the current voltage in mV */
@@ -269,29 +274,41 @@ static unsigned int battery_rate(void) {
 static unsigned int battery_status(void) {
     const u8 status = read_byte_register(BATTERY_REGISTER_STATUS);
 
-    if (status & 0x01)
+    if (status & 0x01) {
         return POWER_SUPPLY_STATUS_DISCHARGING;
-    else if (status & 0x02)
+    } else if (status & 0x02) {
         return POWER_SUPPLY_STATUS_CHARGING;
-    else if ((status & 0x03) == 0x00)
+    } else if ((status & 0x03) == 0x00) {
+        battery_last_full_energy = battery_energy();
         return POWER_SUPPLY_STATUS_FULL;
-    else
+    } else {
         return POWER_SUPPLY_STATUS_UNKNOWN;
+    }
 }
 
 /** Read the capacity in % (energy compared to energy if full) */
 static unsigned int battery_capacity(void) {
     unsigned int last_full = battery_energy_full();
-    if (unlikely(!last_full))
+    if (unlikely(!last_full)) {
         return 0;
-    else
-        return 100 * battery_energy() / battery_energy_full();
+    } else {
+        unsigned int capacity;
+        /* rounded division */
+        capacity = (100 * battery_energy() + last_full / 2) / last_full;
+
+        if (unlikely(capacity > 100)) {
+            printk(KERN_WARNING "battery module: capacity > 100%\n");
+            return 100;
+        } else {
+            return capacity;
+        }
+    }
 }
 
 /** Read the level of capacity. Calculation based on fixed thresholds */
 static unsigned int battery_capaity_level(void) {
     const unsigned int capacity = battery_capacity();
-    if (capacity == 100)
+    if (capacity >= 99)
         return POWER_SUPPLY_CAPACITY_LEVEL_FULL;
     else if (capacity <= 5)
         return POWER_SUPPLY_CAPACITY_LEVEL_CRITICAL;
@@ -424,6 +441,7 @@ static int ac_adapter_get_property(
     return 0;
 }
 
+/** Kernel thread for periodical updates of the AC state */
 static int ac_adapter_updater(void *params) {
     unsigned int last_state = -1;
     while (!kthread_should_stop()) {
