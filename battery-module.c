@@ -307,15 +307,19 @@ static unsigned int battery_capacity(void) {
 
 /** Read the level of capacity. Calculation based on fixed thresholds */
 static unsigned int battery_capaity_level(void) {
-    const unsigned int capacity = battery_capacity();
-    if (capacity >= 99)
+    if (battery_status() == POWER_SUPPLY_STATUS_FULL) {
         return POWER_SUPPLY_CAPACITY_LEVEL_FULL;
-    else if (capacity <= 5)
-        return POWER_SUPPLY_CAPACITY_LEVEL_CRITICAL;
-    else if (capacity <= 15)
-        return POWER_SUPPLY_CAPACITY_LEVEL_LOW;
-    else
-        return POWER_SUPPLY_CAPACITY_LEVEL_NORMAL;
+    } else {
+        const unsigned int capacity = battery_capacity();
+        if (capacity >= 99)
+            return POWER_SUPPLY_CAPACITY_LEVEL_FULL;
+        else if (capacity <= 5)
+            return POWER_SUPPLY_CAPACITY_LEVEL_CRITICAL;
+        else if (capacity <= 15)
+            return POWER_SUPPLY_CAPACITY_LEVEL_LOW;
+        else
+            return POWER_SUPPLY_CAPACITY_LEVEL_NORMAL;
+    }
 }
 
 /** Read the estimated time until the battery is empty */
