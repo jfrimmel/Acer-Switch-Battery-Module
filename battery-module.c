@@ -238,23 +238,23 @@ static u8 read_byte_register(const u8 reg) {
  *
  * The LSB is the register address, the MSB is register address + 1.
  */
-static u16 read_word_register(const u8 reg) {
+static inline u16 read_word_register(const u8 reg) {
     return (read_byte_register(reg + 1) << 8) | read_byte_register(reg);
 }
 
 
 /** Read the current energy in mWh */
-static unsigned int battery_energy(void) {
+static inline unsigned int battery_energy(void) {
     return read_word_register(BATTERY_REGISTER_ENERGY) * 10;
 }
 
 /** Read the last full energy in mWh */
-static unsigned int battery_energy_full(void) {
+static inline unsigned int battery_energy_full(void) {
     return battery_last_full_energy;
 }
 
 /** Read the current voltage in mV */
-static unsigned int battery_voltage(void) {
+static inline unsigned int battery_voltage(void) {
     return read_word_register(BATTERY_REGISTER_VOLTAGE);
 }
 
@@ -268,7 +268,7 @@ static unsigned int battery_current(void) {
 }
 
 /** Read the current (dis-)charging rate in mW */
-static unsigned int battery_rate(void) {
+static inline unsigned int battery_rate(void) {
     return battery_current() * battery_voltage();
 }
 
@@ -298,12 +298,7 @@ static unsigned int battery_capacity(void) {
         /* rounded division */
         capacity = (100 * battery_energy() + last_full / 2) / last_full;
 
-        if (unlikely(capacity > 100)) {
-            printk(KERN_WARNING "battery module: capacity > 100%\n");
-            return 100;
-        } else {
-            return capacity;
-        }
+        return unlikely(capacity > 100) ? 100 : capacity;
     }
 }
 
@@ -333,13 +328,10 @@ static unsigned int battery_time_to_empty(void) {
 }
 
 /** Read the state of the AC plug */
-static unsigned int ac_adapter_online(void) {
+static inline unsigned int ac_adapter_online(void) {
     u8 data = i2c_smbus_read_byte_data(ac_adapter_device, AC_ADAPTER_REGISTER);
 
-    if (data & 0x10)
-        return 1;
-    else
-        return 0;
+    return data & 0x10 ? 1 : 0;
 }
 
 /** Read the estimated time until the battery is fully charged */
