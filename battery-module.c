@@ -281,7 +281,10 @@ static unsigned int battery_status(void) {
     } else if (status & 0x02) {
         return POWER_SUPPLY_STATUS_CHARGING;
     } else if ((status & 0x03) == 0x00) {
-        battery_last_full_energy = battery_energy();
+        unsigned int energy = battery_energy();
+        /* allow 10% tolerance */
+        if (energy >= 100 * BATTERY_DEFAULT_FULL_ENERGY / 90)
+            battery_last_full_energy = energy;
         return POWER_SUPPLY_STATUS_FULL;
     } else {
         return POWER_SUPPLY_STATUS_UNKNOWN;
